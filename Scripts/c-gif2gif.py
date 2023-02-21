@@ -31,6 +31,28 @@ def interp(gif, iframes, dur):
     except:
         return False
 
+def MakeGrid(images, rows, cols):
+    widths, heights = zip(*(i.size for i in images))
+
+    grid_width = max(widths) * cols
+    grid_height = max(heights) * rows
+    cell_width = grid_width // cols
+    cell_height = grid_height // rows
+
+    final_image = Image.new('RGB', (grid_width, grid_height))
+
+    x_offset = 0
+    y_offset = 0
+    for i in range(len(images)):
+        final_image.paste(images[i], (x_offset, y_offset))
+        x_offset += cell_width
+        if x_offset == grid_width:
+            x_offset = 0
+            y_offset += cell_height
+
+    # Save the final image
+    return final_image
+
 class Script(scripts.Script):
     def __init__(self):
         self.gif_name = str()
@@ -62,23 +84,21 @@ class Script(scripts.Script):
         with gr.Box():    
             with gr.Column():
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
-                display_gif = gr.Image(inputs = upload_gif, visible = False, label = "Preview GIF", type= "filepath")
-                with gr.Accordion("Settings", open = True):
+                display_gif = gr.Image(inputs = upload_gif, visible = False, label = "Preview GIF", type= "filepath").style(height=480)
+                with gr.Box():
                     with gr.Row():
                         with gr.Column():
                             with gr.Box():
+                                grid_x_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid rows")
+                                grid_y_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid columns") 
                                 gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                                 gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
-                                grid_x_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid rows")
-                                grid_y_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid columns")
-                        with gr.Column():   
-                            with gr.Row():
-                                with gr.Box():
-                                    with gr.Column():
-                                        frames_per_sheet = gr.Textbox(value="", interactive = False, label = "Frames per sheet")
-                                with gr.Box():
-                                    with gr.Column():
-                                        number_of_sheets = gr.Textbox(value="", interactive = False, label = "Number of sheets")
+                        with gr.Column():
+                            with gr.Box():
+                                frames_per_sheet = gr.Textbox(value="", interactive = False, label = "Frames per sheet")
+                                number_of_sheets = gr.Textbox(value="", interactive = False, label = "Number of sheets")
+                grid_gen_button = gr.Button(value = "Generate sheets")
+                sheet_gallery = gr.Gallery(label = "Sheets for generation")                
                 with gr.Accordion("Animation tweaks", open = False):
                     with gr.Row():
                         with gr.Column():
@@ -107,18 +127,13 @@ class Script(scripts.Script):
                 self.gif_name = gif.name
                 #Need to also put images in img2img/inpainting windows (ui will not run without)
                 #Gradio painting tools act weird with smaller images.. resize to 480 if smaller
-                img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
-                img_for_ui = init_gif
-                if img_for_ui.height < 480:
-                    img_for_ui = img_for_ui.resize((round(480*img_for_ui.width/img_for_ui.height), 480), Image.Resampling.LANCZOS)
-                img_for_ui.save(img_for_ui_path)
                 self.orig_dimensions = init_gif.size
                 self.orig_duration = init_gif.info["duration"]
                 self.orig_n_frames = init_gif.n_frames
                 self.orig_total_seconds = round((self.orig_duration * self.orig_n_frames)/1000, 2)
                 self.orig_fps = round(1000 / int(init_gif.info["duration"]), 2)
                 self.ready = True
-                return img_for_ui_path, img_for_ui_path, gif.name, gr.Image.update(visible = True), self.orig_fps, self.orig_fps, (f"{self.orig_total_seconds} seconds"), self.orig_n_frames
+                return gif.name, gr.Image.update(visible = True), self.orig_fps, self.orig_fps, (f"{self.orig_total_seconds} seconds"), self.orig_n_frames
             except:
                 print(f"Failed to load {gif.name}. Not a valid animated GIF?")
                 return None
@@ -146,12 +161,34 @@ class Script(scripts.Script):
                 if interp:
                     interp(gifbuffer, self.desired_interp, self.desired_duration)
                 return gifbuffer, round(1000/self.desired_duration, 2), f"{self.desired_total_seconds} seconds", total_n_frames
+        
+        def gridgif(gif, cols, rows):
+            pilframes = []
+            grids = []
+            framesper = cols * rows
+            init_gif = Image.open(gif.name)
+            img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
+            img_for_ui = init_gif
+            if img_for_ui.height < 480:
+                img_for_ui = img_for_ui.resize((round(480*img_for_ui.width/img_for_ui.height), 480), Image.Resampling.LANCZOS)
+            img_for_ui.save(img_for_ui_path)
+            #Break gif
+            for frame in ImageSequence.Iterator(init_gif):
+                interm = frame.convert("RGB")
+                pilframes.append(interm)
+            #Make chunks
+            pilchunks = [pilframes[i:i+framesper] for i in range(0, len(pilframes), framesper)]
+            #Make grids from the chunks
+            for chunk in pilchunks:
+                grids.append(MakeGrid(chunk, cols, rows))
+            return grids, img_for_ui, img_for_ui, framesper, len(grids)
 
         #Control change events
         fps_slider.change(fn=fpsupdate, inputs = [fps_slider, interp_slider], outputs = [display_gif, fps_actual, seconds_actual, frames_actual])
         interp_slider.change(fn=fpsupdate, inputs = [fps_slider, interp_slider], outputs = [display_gif, fps_actual, seconds_actual, frames_actual])
-        upload_gif.upload(fn=processgif, inputs = upload_gif, outputs = [self.img2img_component, self.img2img_inpaint_component, display_gif, display_gif, fps_slider, fps_original, seconds_original, frames_original])
+        upload_gif.upload(fn=processgif, inputs = upload_gif, outputs = [display_gif, display_gif, fps_slider, fps_original, seconds_original, frames_original])
         upload_gif.change(fn=cleargif, inputs = upload_gif, outputs = display_gif)
+        grid_gen_button.click(fn=gridgif, inputs = [upload_gif, grid_x_slider, grid_y_slider], outputs = [sheet_gallery, self.img2img_component, self.img2img_inpaint_component, frames_per_sheet, number_of_sheets])
 
         return [gif_resize, gif_clear_frames, gif_common_seed]
 
