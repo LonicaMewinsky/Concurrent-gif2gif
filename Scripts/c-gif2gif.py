@@ -54,8 +54,8 @@ def MakeGrid(images, rows, cols):
     return final_image
 
 def BreakGrid(grid, rows, cols):
-    width = grid.width // rows
-    height = grid.height // cols
+    width = grid.width // cols
+    height = grid.height // rows
     outimages = []
     for row in range(rows):
             for col in range(cols):
@@ -108,8 +108,8 @@ class Script(scripts.Script):
                     with gr.Row():
                         with gr.Column():
                             with gr.Box():
-                                grid_x_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
-                                grid_y_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
+                                grid_row_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
+                                grid_col_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
                                 gif_resize = gr.Checkbox(value = True, label="Resize result back to original dimensions")
                                 gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                                 gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
@@ -184,8 +184,8 @@ class Script(scripts.Script):
         def gridgif(gif, rows, cols):
             pilframes = []
             grids = []
-            self.desired_cols = cols
             self.desired_rows = rows
+            self.desired_cols = cols
             framesper = cols * rows
             init_gif = Image.open(gif.name)
             #Break gif
@@ -212,7 +212,7 @@ class Script(scripts.Script):
         interp_slider.change(fn=fpsupdate, inputs = [fps_slider, interp_slider], outputs = [display_gif, fps_actual, seconds_actual, frames_actual])
         upload_gif.upload(fn=processgif, inputs = upload_gif, outputs = [display_gif, display_gif, fps_slider, fps_original, seconds_original, frames_original])
         upload_gif.change(fn=cleargif, inputs = upload_gif, outputs = display_gif)
-        grid_gen_button.click(fn=gridgif, inputs = [upload_gif, grid_x_slider, grid_y_slider], outputs = [sheet_gallery, self.img2img_component, self.img2img_inpaint_component, frames_per_sheet, number_of_sheets])
+        grid_gen_button.click(fn=gridgif, inputs = [upload_gif, grid_row_slider, grid_col_slider], outputs = [sheet_gallery, self.img2img_component, self.img2img_inpaint_component, frames_per_sheet, number_of_sheets])
 
         return [gif_resize, gif_clear_frames, gif_common_seed]
 
