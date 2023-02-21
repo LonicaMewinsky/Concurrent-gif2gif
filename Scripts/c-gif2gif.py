@@ -31,6 +31,23 @@ def interp(gif, iframes, dur):
     except:
         return False
 
+def FindAverageColor(image):
+    width, height = image.size
+    total_r, total_g, total_b = 0, 0, 0
+    for x in range(width):
+        for y in range(height):
+            r, g, b = image.getpixel((x, y))
+            total_r += r
+            total_g += g
+            total_b += b
+
+    num_pixels = width * height
+    avg_r = total_r // num_pixels
+    avg_g = total_g // num_pixels
+    avg_b = total_b // num_pixels
+
+    return (avg_r, avg_g, avg_b)
+
 def MakeGrid(images, rows, cols):
     widths, heights = zip(*(i.size for i in images))
 
@@ -39,7 +56,8 @@ def MakeGrid(images, rows, cols):
     cell_width = grid_width // cols
     cell_height = grid_height // rows
 
-    final_image = Image.new('RGB', (grid_width, grid_height))
+    avgclr = FindAverageColor(images[0])
+    final_image = Image.new('RGB', (grid_width, grid_height), color=avgclr)
 
     x_offset = 0
     y_offset = 0
