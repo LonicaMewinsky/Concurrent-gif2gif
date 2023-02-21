@@ -53,6 +53,23 @@ def MakeGrid(images, rows, cols):
     # Save the final image
     return final_image
 
+def BreakGrid(grid, rows, cols):
+    width = grid.width // rows
+    height = grid.height // cols
+    outimages = []
+    for row in range(rows):
+            for col in range(cols):
+                left = col * width
+                top = row * height
+                right = left + width
+                bottom = top + height
+
+                current_img = grid.crop((left, top, right, bottom))
+
+                #current_img = current_img.resize([300, 300], Image.Resampling.LANCZOS)
+                outimages.append(current_img)
+    return outimages
+
 class Script(scripts.Script):
     def __init__(self):
         self.gif_name = str()
@@ -66,6 +83,9 @@ class Script(scripts.Script):
         self.desired_interp = 0
         self.desired_duration = 0
         self.desired_total_seconds = 0
+        self.desired_rows = 0
+        self.desired_cols = 0
+        self.readygrids = []
         self.slowmo = False
         self.gif2gifdir = tempfile.TemporaryDirectory()
         self.img2img_component = gr.Image()
@@ -84,19 +104,19 @@ class Script(scripts.Script):
         with gr.Box():    
             with gr.Column():
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
-                display_gif = gr.Image(inputs = upload_gif, visible = False, label = "Preview GIF", type= "filepath").style(height=480)
+
                 with gr.Box():
                     with gr.Row():
                         with gr.Column():
                             with gr.Box():
-                                grid_x_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid rows")
-                                grid_y_slider = gr.Slider(1, 10, step = 1, interactive=True, label = "Grid columns") 
+                                grid_x_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
+                                grid_y_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns") 
                                 gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                                 gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
                         with gr.Column():
                             with gr.Box():
-                                frames_per_sheet = gr.Textbox(value="", interactive = False, label = "Frames per sheet")
-                                number_of_sheets = gr.Textbox(value="", interactive = False, label = "Number of sheets")
+                                frames_per_sheet = gr.Textbox(value="0", interactive = False, label = "Frames per sheet")
+                                number_of_sheets = gr.Textbox(value="0", interactive = False, label = "Number of sheets")
                 grid_gen_button = gr.Button(value = "Generate sheets")
                 sheet_gallery = gr.Gallery(label = "Sheets for generation")                
                 with gr.Accordion("Animation tweaks", open = False):
@@ -120,6 +140,8 @@ class Script(scripts.Script):
                                         fps_original = gr.Textbox(value="", interactive = False, label = "Original FPS")
                                         seconds_original = gr.Textbox(value="", interactive = False, label = "Original total duration")
                                         frames_original = gr.Textbox(value="", interactive = False, label = "Original total frames")
+                    display_gif = gr.Image(inputs = upload_gif, visible = False, label = "Preview GIF", type= "filepath")
+
         #Control functions
         def processgif(gif):
             try:
@@ -165,6 +187,8 @@ class Script(scripts.Script):
         def gridgif(gif, cols, rows):
             pilframes = []
             grids = []
+            self.desired_cols = cols
+            self.desired_rows = rows
             framesper = cols * rows
             init_gif = Image.open(gif.name)
             #Break gif
@@ -175,7 +199,8 @@ class Script(scripts.Script):
             pilchunks = [pilframes[i:i+framesper] for i in range(0, len(pilframes), framesper)]
             #Make grids from the chunks
             for chunk in pilchunks:
-                grids.append(MakeGrid(chunk, cols, rows))
+                grids.append(MakeGrid(chunk, cols, rows).resize([2048, 2048], Image.Resampling.LANCZOS))
+            self.readygrids = grids
             #Update vanilla UI
             img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
             img_for_ui = grids[0]
@@ -209,3 +234,60 @@ class Script(scripts.Script):
         if component.elem_id == "img2img_height":
             self.img2img_height_component = component
             return self.img2img_height_component
+    
+    #Main run
+    def run(self, p, gif_resize, gif_clear_frames, gif_common_seed):
+
+        return_images, all_prompts, infotexts, inter_images = [], [], [], []
+        state.job_count = len(self.readygrids) * p.n_iter
+        p.do_not_save_grid = True
+        p.do_not_save_samples = gif_clear_frames
+        gif_n_iter = p.n_iter
+        p.n_iter = 1 #we'll be processing iters per-gif-set
+        outpath = os.path.join(p.outpath_samples, "gif2gif")
+        print(f"Will process {gif_n_iter * p.batch_size} GIF(s) with {state.job_count * p.batch_size} total frames.")
+        #Iterate batch count
+        for x in range(gif_n_iter):
+            if state.skipped: state.skipped = False
+            if state.interrupted: break
+            if(gif_common_seed and (p.seed == -1)):
+                p.seed = random.randrange(100000000, 999999999)
+            
+            #Iterate grids
+            for grid in self.readygrids:
+                if state.skipped: state.skipped = False
+                if state.interrupted: break
+                state.job = f"{state.job_no + 1} out of {state.job_count}"
+                copy_p = copy.copy(p)
+                copy_p.init_images = [grid] * p.batch_size
+                copy_p.control_net_input_image = grid.convert("RGB") #account for controlnet
+                proc = process_images(copy_p) #process
+                for pi in proc.images: #Just in case another extension spits out a non-image (like controlnet)
+                    if type(pi) is Image.Image:
+                        inter_images.append(pi)
+                all_prompts += proc.all_prompts
+                infotexts += proc.infotexts
+            #Separate frames by batch size
+            inter_batch = []
+            for b in range(p.batch_size):
+                for bi in inter_images[(b)::p.batch_size]:
+                    inter_batch.append(bi)
+                #First make temporary file via save_images, then save actual gif over it..
+                #Probably a better way to do this, but this easily maintains file name and .txt file logic
+                gif_filename = (modules.images.save_image(self.readygrids[0], outpath, "gif2gif", extension = 'gif', info = infotexts[b])[0])
+                print(f"gif2gif: Generating GIF to {gif_filename}..")
+                grid_images = []
+                for gridsheet in inter_batch:
+                    grid_images += BreakGrid(gridsheet, self.desired_rows, self.desired_cols)
+                for i in range(len(grid_images)):
+                    grid_images[i] = grid_images[i].resize(self.orig_dimensions)
+                grid_images[0].save(gif_filename,
+                    save_all = True, append_images = grid_images[1:], loop = 0,
+                    optimize = False, duration = self.desired_duration)
+                if(self.desired_interp > 0):
+                    print(f"gif2gif: Interpolating {gif_filename}..")
+                    interp(gif_filename, self.desired_interp, self.desired_duration)
+                return_images.extend(grid_images)
+                inter_batch = []
+            inter_images = []
+        return Processed(p, return_images, p.seed, "", all_prompts=all_prompts, infotexts=infotexts)
