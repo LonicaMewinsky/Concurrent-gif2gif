@@ -104,13 +104,13 @@ class Script(scripts.Script):
         with gr.Box():    
             with gr.Column():
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
-
                 with gr.Box():
                     with gr.Row():
                         with gr.Column():
                             with gr.Box():
                                 grid_x_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
-                                grid_y_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns") 
+                                grid_y_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
+                                gif_resize = gr.Checkbox(value = True, label="Resize result back to original dimensions")
                                 gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                                 gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
                         with gr.Column():
@@ -125,9 +125,6 @@ class Script(scripts.Script):
                             with gr.Box():
                                 fps_slider = gr.Slider(1, 50, step = 1, label = "Desired FPS")
                                 interp_slider = gr.Slider(label = "Interpolation frames", value = 0)
-                                gif_resize = gr.Checkbox(value = True, label="Resize result back to original dimensions")
-                                gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
-                                gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
                         with gr.Column():   
                             with gr.Row():
                                 with gr.Box():
@@ -184,7 +181,7 @@ class Script(scripts.Script):
                     interp(gifbuffer, self.desired_interp, self.desired_duration)
                 return gifbuffer, round(1000/self.desired_duration, 2), f"{self.desired_total_seconds} seconds", total_n_frames
         
-        def gridgif(gif, cols, rows):
+        def gridgif(gif, rows, cols):
             pilframes = []
             grids = []
             self.desired_cols = cols
@@ -199,7 +196,7 @@ class Script(scripts.Script):
             pilchunks = [pilframes[i:i+framesper] for i in range(0, len(pilframes), framesper)]
             #Make grids from the chunks
             for chunk in pilchunks:
-                grids.append(MakeGrid(chunk, cols, rows).resize([2048, 2048], Image.Resampling.LANCZOS))
+                grids.append(MakeGrid(chunk, rows, cols).resize([2048, 2048], Image.Resampling.LANCZOS))
             self.readygrids = grids
             #Update vanilla UI
             img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
@@ -281,6 +278,7 @@ class Script(scripts.Script):
                     grid_images += BreakGrid(gridsheet, self.desired_rows, self.desired_cols)
                 for i in range(len(grid_images)):
                     grid_images[i] = grid_images[i].resize(self.orig_dimensions)
+                grid_images = grid_images[0:self.orig_n_frames]
                 grid_images[0].save(gif_filename,
                     save_all = True, append_images = grid_images[1:], loop = 0,
                     optimize = False, duration = self.desired_duration)
