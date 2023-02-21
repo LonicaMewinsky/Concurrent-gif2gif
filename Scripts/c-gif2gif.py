@@ -167,11 +167,6 @@ class Script(scripts.Script):
             grids = []
             framesper = cols * rows
             init_gif = Image.open(gif.name)
-            img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
-            img_for_ui = init_gif
-            if img_for_ui.height < 480:
-                img_for_ui = img_for_ui.resize((round(480*img_for_ui.width/img_for_ui.height), 480), Image.Resampling.LANCZOS)
-            img_for_ui.save(img_for_ui_path)
             #Break gif
             for frame in ImageSequence.Iterator(init_gif):
                 interm = frame.convert("RGB")
@@ -181,6 +176,13 @@ class Script(scripts.Script):
             #Make grids from the chunks
             for chunk in pilchunks:
                 grids.append(MakeGrid(chunk, cols, rows))
+            #Update vanilla UI
+            img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
+            img_for_ui = grids[0]
+            if img_for_ui.height < 480:
+                img_for_ui = img_for_ui.resize((round(480*img_for_ui.width/img_for_ui.height), 480), Image.Resampling.LANCZOS)
+            img_for_ui.save(img_for_ui_path)
+
             return grids, img_for_ui, img_for_ui, framesper, len(grids)
 
         #Control change events
