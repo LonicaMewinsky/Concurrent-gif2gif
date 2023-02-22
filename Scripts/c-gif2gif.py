@@ -8,7 +8,7 @@ import tempfile
 import random
 from PIL import Image, ImageSequence
 from modules.processing import Processed, process_images
-from modules.shared import state
+from modules.shared import state, sd_upscalers
 
 #Rudimentary interpolation
 def interp(gif, iframes, dur):
@@ -88,6 +88,21 @@ def BreakGrid(grid, rows, cols):
                 outimages.append(current_img)
     return outimages
 
+def upscale(image, upscaler_name, upscale_mode, upscale_by, upscale_to_width, upscale_to_height, upscale_crop):
+    if upscale_mode == 1:
+        upscale_by = max(upscale_to_width/image.width, upscale_to_height/image.height)
+    
+    upscaler = next(iter([x for x in sd_upscalers if x.name == upscaler_name]), None)
+    assert upscaler or (upscaler_name is None), f'could not find upscaler named {upscaler_name}'
+
+    image = upscaler.scaler.upscale(image, upscale_by, upscaler.data_path)
+    if upscale_mode == 1 and upscale_crop:
+        cropped = Image.new("RGB", (upscale_to_width, upscale_to_height))
+        cropped.paste(image, box=(upscale_to_width // 2 - image.width // 2, upscale_to_height // 2 - image.height // 2))
+        image = cropped
+
+    return image
+
 class Script(scripts.Script):
     def __init__(self):
         self.gif_name = str()
@@ -110,6 +125,7 @@ class Script(scripts.Script):
         self.img2img_inpaint_component = gr.Image()
         self.img2img_width_component = gr.Slider()
         self.img2img_height_component = gr.Slider()
+        self.upscale_args = {}
         return None
 
     def title(self):
@@ -122,19 +138,31 @@ class Script(scripts.Script):
         with gr.Box():    
             with gr.Column():
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
-                with gr.Box():
+                with gr.Row():
+                    with gr.Column():
+                        grid_row_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
+                        grid_col_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
+                        gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
+                        gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
+                    with gr.Column():
+                        frames_per_sheet = gr.Textbox(value="0", interactive = False, label = "Frames per sheet")
+                        number_of_sheets = gr.Textbox(value="0", interactive = False, label = "Number of sheets")
+                with gr.Accordion("Upscaling", open = False):
                     with gr.Row():
                         with gr.Column():
-                            with gr.Box():
-                                grid_row_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
-                                grid_col_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
-                                gif_resize = gr.Checkbox(value = True, label="Resize result back to original dimensions")
-                                gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
-                                gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
+                            with gr.Tabs():
+                                with gr.Tab("Scale by") as tab_scale_by:
+                                    with gr.Box():   
+                                        ups_scale_by = gr.Slider(1, 8, step = 0.1, value=2, interactive = True, label = "Factor")
+                                with gr.Tab("Scale to") as tab_scale_to:
+                                    with gr.Box():
+                                        with gr.Column():
+                                            ups_scale_to_w = gr.Slider(0, 8000, step = 8, value=512, interactive = True, label = "Target width")
+                                            ups_scale_to_h = gr.Slider(0, 8000, step = 8, value=512, interactive = True, label = "Target height")
+                                            ups_scale_to_crop = gr.Checkbox(value = False, label = "Crop to fit")
                         with gr.Column():
                             with gr.Box():
-                                frames_per_sheet = gr.Textbox(value="0", interactive = False, label = "Frames per sheet")
-                                number_of_sheets = gr.Textbox(value="0", interactive = False, label = "Number of sheets")
+                                ups_upscaler_1 = gr.Dropdown(value = "None", interactive = True, choices = [x.name for x in sd_upscalers], label = "Upscaler 1")
                 grid_gen_button = gr.Button(value = "Generate sheets")
                 sheet_gallery = gr.Gallery(label = "Sheets for generation")                
                 with gr.Accordion("Animation tweaks", open = False):
@@ -198,7 +226,7 @@ class Script(scripts.Script):
                 if interp:
                     interp(gifbuffer, self.desired_interp, self.desired_duration)
                 return gifbuffer, round(1000/self.desired_duration, 2), f"{self.desired_total_seconds} seconds", total_n_frames
-        
+
         def gridgif(gif, rows, cols):
             pilframes = []
             grids = []
@@ -226,13 +254,16 @@ class Script(scripts.Script):
             return grids, img_for_ui, img_for_ui, framesper, len(grids)
 
         #Control change events
+        ups_scale_mode = gr.State(value = 0)
         fps_slider.change(fn=fpsupdate, inputs = [fps_slider, interp_slider], outputs = [display_gif, fps_actual, seconds_actual, frames_actual])
         interp_slider.change(fn=fpsupdate, inputs = [fps_slider, interp_slider], outputs = [display_gif, fps_actual, seconds_actual, frames_actual])
         upload_gif.upload(fn=processgif, inputs = upload_gif, outputs = [display_gif, display_gif, fps_slider, fps_original, seconds_original, frames_original])
         upload_gif.change(fn=cleargif, inputs = upload_gif, outputs = display_gif)
         grid_gen_button.click(fn=gridgif, inputs = [upload_gif, grid_row_slider, grid_col_slider], outputs = [sheet_gallery, self.img2img_component, self.img2img_inpaint_component, frames_per_sheet, number_of_sheets])
+        tab_scale_by.select(fn=lambda: 0, inputs=[], outputs=[ups_scale_mode])
+        tab_scale_to.select(fn=lambda: 1, inputs=[], outputs=[ups_scale_mode])
 
-        return [gif_resize, gif_clear_frames, gif_common_seed]
+        return [gif_clear_frames, gif_common_seed, ups_scale_mode, ups_scale_by, ups_scale_to_w, ups_scale_to_h, ups_scale_to_crop, ups_upscaler_1]
 
     #Grab the img2img image components for update later
     #Maybe there's a better way to do this?
@@ -251,7 +282,7 @@ class Script(scripts.Script):
             return self.img2img_height_component
     
     #Main run
-    def run(self, p, gif_resize, gif_clear_frames, gif_common_seed):
+    def run(self, p, gif_clear_frames, gif_common_seed, ups_scale_mode, ups_scale_by, ups_scale_to_w, ups_scale_to_h, ups_scale_to_crop, ups_upscaler_1):
 
         return_images, all_prompts, infotexts, inter_images = [], [], [], []
         state.job_count = len(self.readygrids) * p.n_iter
@@ -260,7 +291,7 @@ class Script(scripts.Script):
         gif_n_iter = p.n_iter
         p.n_iter = 1 #we'll be processing iters per-gif-set
         outpath = os.path.join(p.outpath_samples, "gif2gif")
-        print(f"Will process {gif_n_iter * p.batch_size} GIF(s) with {state.job_count * p.batch_size} total frames.")
+        print(f"Will process {gif_n_iter * p.batch_size} GIF(s) with {state.job_count * p.batch_size} total sheet generations.")
         #Iterate batch count
         for x in range(gif_n_iter):
             if state.skipped: state.skipped = False
@@ -285,6 +316,8 @@ class Script(scripts.Script):
             #Separate frames by batch size
             inter_batch = []
             for b in range(p.batch_size):
+                if state.skipped: state.skipped = False
+                if state.interrupted: break
                 for bi in inter_images[(b)::p.batch_size]:
                     inter_batch.append(bi)
                 #First make temporary file via save_images, then save actual gif over it..
@@ -293,9 +326,11 @@ class Script(scripts.Script):
                 print(f"gif2gif: Generating GIF to {gif_filename}..")
                 grid_images = []
                 for gridsheet in inter_batch:
+                    gridsheet = upscale(gridsheet, ups_upscaler_1, ups_scale_mode, ups_scale_by, ups_scale_to_w, ups_scale_to_h, ups_scale_to_crop)
                     grid_images += BreakGrid(gridsheet, self.desired_rows, self.desired_cols)
-                for i in range(len(grid_images)):
-                    grid_images[i] = grid_images[i].resize(self.orig_dimensions)
+                #if gif_resize:
+                #    for i in range(len(grid_images)):
+                #        grid_images[i] = grid_images[i].resize(self.orig_dimensions)
                 grid_images = grid_images[0:self.orig_n_frames]
                 grid_images[0].save(gif_filename,
                     save_all = True, append_images = grid_images[1:], loop = 0,
