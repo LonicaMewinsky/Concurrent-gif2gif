@@ -6,9 +6,49 @@ import gradio as gr
 import numpy as np
 import tempfile
 import random
-from PIL import Image, ImageSequence
+import cv2
+from PIL import Image, ImageSequence, ImageOps
 from modules.processing import Processed, process_images
 from modules.shared import state, sd_upscalers
+
+def stabilize_images(images):
+    # Convert PIL images to numpy arrays
+    images = [np.array(img) for img in images]
+
+    # Initialize the output list
+    stabilized_images = []
+
+    # Load the first image
+    prev_image = images[0]
+
+    # Loop through the rest of the images
+    for curr_image in images[1:]:
+        # Convert the images to grayscale
+        prev_gray = cv2.cvtColor(prev_image, cv2.COLOR_RGB2GRAY)
+        curr_gray = cv2.cvtColor(curr_image, cv2.COLOR_RGB2GRAY)
+
+        # Calculate the phase correlation between the previous and current images
+        shape = curr_gray.shape
+        h, w = shape[0], shape[1]
+        fft_prev = np.fft.fft2(prev_gray)
+        fft_curr = np.fft.fft2(curr_gray)
+        cc = np.real(np.fft.ifft2((fft_prev * fft_curr.conj()) / np.abs(fft_prev * fft_curr.conj())))
+        cc_max = np.unravel_index(np.argmax(cc), cc.shape)
+        offset = np.array([cc_max[0] - h if cc_max[0] > h // 2 else cc_max[0],
+                           cc_max[1] - w if cc_max[1] > w // 2 else cc_max[1]])
+        
+        # Apply the phase shift to the current image to generate the stabilized image
+        M = np.float32([[1, 0, offset[1]], [0, 1, offset[0]]])
+        curr_stabilized = cv2.warpAffine(curr_image, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+
+        # Convert the stabilized image back to a PIL image and append it to the output list
+        stabilized_images.append(Image.fromarray(cv2.cvtColor(curr_stabilized, cv2.COLOR_BGR2RGB)))
+
+        # Set the current image as the previous image for the next iteration
+        prev_image = curr_image
+
+    # Return the list of stabilized PIL images
+    return stabilized_images
 
 #Rudimentary interpolation
 def interp(gif, iframes, dur):
@@ -31,22 +71,14 @@ def interp(gif, iframes, dur):
     except:
         return False
 
-def FindAverageColor(image):
-    width, height = image.size
-    total_r, total_g, total_b = 0, 0, 0
-    for x in range(width):
-        for y in range(height):
-            r, g, b = image.getpixel((x, y))
-            total_r += r
-            total_g += g
-            total_b += b
+def split_frames(lst, max_length):
 
-    num_pixels = width * height
-    avg_r = total_r // num_pixels
-    avg_g = total_g // num_pixels
-    avg_b = total_b // num_pixels
-
-    return (avg_r, avg_g, avg_b)
+    num_sublists = -(-len(lst) // max_length)  # ceil division
+    sublists = [lst[i*max_length:(i+1)*max_length] for i in range(num_sublists)]
+    last_sublist = sublists[-1] if len(sublists[-1]) == max_length else sublists.pop()
+    last_sublist.extend([last_sublist[-1]] * (max_length - len(last_sublist)))
+    sublists.append(last_sublist)
+    return sublists
 
 def MakeGrid(images, rows, cols):
     widths, heights = zip(*(i.size for i in images))
@@ -56,8 +88,8 @@ def MakeGrid(images, rows, cols):
     cell_width = grid_width // cols
     cell_height = grid_height // rows
 
-    avgclr = FindAverageColor(images[0])
-    final_image = Image.new('RGB', (grid_width, grid_height), color=avgclr)
+
+    final_image = Image.new('RGB', (grid_width, grid_height))
 
     x_offset = 0
     y_offset = 0
@@ -131,7 +163,7 @@ class Script(scripts.Script):
     def title(self):
         return "Concurrent gif2gif"
     def show(self, is_img2img):
-        return is_img2img
+        return True
     
     def ui(self, is_img2img):
         #Controls
@@ -140,8 +172,8 @@ class Script(scripts.Script):
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
                 with gr.Row():
                     with gr.Column():
-                        grid_row_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid rows")
-                        grid_col_slider = gr.Slider(1, 10, step = 1, value=4, interactive=True, label = "Grid columns")
+                        grid_row_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Rows")
+                        grid_col_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Columns")
                         gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                         gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
                     with gr.Column():
@@ -237,12 +269,16 @@ class Script(scripts.Script):
             #Break gif
             for frame in ImageSequence.Iterator(init_gif):
                 interm = frame.convert("RGB")
+                interm = interm.resize([(interm.width - (interm.width % 4)), (interm.height - (interm.height % 4))], Image.Resampling.LANCZOS)
+                #interm = ImageOps.expand(interm, border=8,fill='white')
                 pilframes.append(interm)
             #Make chunks
-            pilchunks = [pilframes[i:i+framesper] for i in range(0, len(pilframes), framesper)]
+            pilchunks = split_frames(pilframes, framesper)
             #Make grids from the chunks
             for chunk in pilchunks:
-                grids.append(MakeGrid(chunk, rows, cols).resize([2048, 2048], Image.Resampling.LANCZOS))
+                grid = MakeGrid(chunk, rows, cols)
+                #grid = grid.resize([(grid.width - (grid.width % cols)), (grid.height - (grid.height % rows))], Image.Resampling.LANCZOS)
+                grids.append(grid)
             self.readygrids = grids
             #Update vanilla UI
             img_for_ui_path = (f"{self.gif2gifdir.name}/imgforui.gif")
@@ -292,6 +328,8 @@ class Script(scripts.Script):
         p.n_iter = 1 #we'll be processing iters per-gif-set
         outpath = os.path.join(p.outpath_samples, "gif2gif")
         print(f"Will process {gif_n_iter * p.batch_size} GIF(s) with {state.job_count * p.batch_size} total sheet generations.")
+        p.width = self.readygrids[0].width
+        p.height = self.readygrids[0].height
         #Iterate batch count
         for x in range(gif_n_iter):
             if state.skipped: state.skipped = False
@@ -307,6 +345,7 @@ class Script(scripts.Script):
                 copy_p = copy.copy(p)
                 copy_p.init_images = [grid] * p.batch_size
                 copy_p.control_net_input_image = grid.convert("RGB") #account for controlnet
+                copy_p.control_net_pres = 2400
                 proc = process_images(copy_p) #process
                 for pi in proc.images: #Just in case another extension spits out a non-image (like controlnet)
                     if type(pi) is Image.Image:
@@ -327,11 +366,13 @@ class Script(scripts.Script):
                 grid_images = []
                 for gridsheet in inter_batch:
                     gridsheet = upscale(gridsheet, ups_upscaler_1, ups_scale_mode, ups_scale_by, ups_scale_to_w, ups_scale_to_h, ups_scale_to_crop)
-                    grid_images += BreakGrid(gridsheet, self.desired_rows, self.desired_cols)
+                    grid_images += BreakGrid(gridsheet, self.desired_rows, self.desired_cols) #break the grid
+
                 #if gif_resize:
                 #    for i in range(len(grid_images)):
                 #        grid_images[i] = grid_images[i].resize(self.orig_dimensions)
                 grid_images = grid_images[0:self.orig_n_frames]
+                #grid_images = stabilize_images(grid_images)
                 grid_images[0].save(gif_filename,
                     save_all = True, append_images = grid_images[1:], loop = 0,
                     optimize = False, duration = self.desired_duration)
