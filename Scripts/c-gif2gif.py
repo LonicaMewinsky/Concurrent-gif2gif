@@ -269,8 +269,8 @@ class Script(scripts.Script):
             #Break gif
             for frame in ImageSequence.Iterator(init_gif):
                 interm = frame.convert("RGB")
+                #Images need to remain a factor a 4!
                 interm = interm.resize([(interm.width - (interm.width % 4)), (interm.height - (interm.height % 4))], Image.Resampling.LANCZOS)
-                #interm = ImageOps.expand(interm, border=8,fill='white')
                 pilframes.append(interm)
             #Make chunks
             pilchunks = split_frames(pilframes, framesper)
@@ -345,7 +345,12 @@ class Script(scripts.Script):
                 copy_p = copy.copy(p)
                 copy_p.init_images = [grid] * p.batch_size
                 copy_p.control_net_input_image = grid.convert("RGB") #account for controlnet
-                copy_p.control_net_pres = 2400
+                copy_p.control_net_lowvram = True
+                copy_p.control_net_resize_mode = "Just Resize"
+                if grid.height > grid.width:
+                    copy_p.control_net_pres = grid.height
+                else:
+                    copy_p.control_net_pres = grid.width
                 proc = process_images(copy_p) #process
                 for pi in proc.images: #Just in case another extension spits out a non-image (like controlnet)
                     if type(pi) is Image.Image:
