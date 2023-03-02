@@ -172,8 +172,8 @@ class Script(scripts.Script):
                 upload_gif = gr.File(label="Upload GIF", file_types = ['.gif','.webp','.plc'], live=True, file_count = "single")
                 with gr.Row():
                     with gr.Column():
-                        grid_row_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Rows")
-                        grid_col_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Columns")
+                        grid_row_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Grid Row")
+                        grid_col_slider = gr.Slider(minimum = 4, maximum = 20, step=2.0, label = "Grid Column")
                         gif_clear_frames = gr.Checkbox(value = True, label="Delete intermediate frames after GIF generation")
                         gif_common_seed = gr.Checkbox(value = True, label="For -1 seed, all frames in a GIF have common seed")
                     with gr.Column():
